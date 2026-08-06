@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTML5 알까기 게임</title>
+  <style>
+    body {
+      background-color: #f0f0f0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+
+    h1 {
+      margin-bottom: 10px;
+      color: #333;
+    }
+
+    #status-board {
+      font-size: 1.2rem;
+      font-weight: bold;
+      margin-bottom: 15px;
+      padding: 10px 20px;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+
+    #game-container {
+      position: relative;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+      border-radius: 4px;
+    }
+
+    canvas {
+      background-color: #e3a857; /* 바둑판 나무색 */
+      display: block;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .controls {
+      margin-top: 15px;
+    }
+
+    button {
+      padding: 8px 16px;
+      font-size: 1rem;
+      font-weight: bold;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background-color: #45a049;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>⚪ HTML5 알까기 게임 🖤</h1>
+  <div id="status-board">현재 차례: <span id="turn-text" style="color: #000;">흑돌</span></div>
+  
+  <div id="game-container">
+    <canvas id="board" width="600" height="600"></canvas>
+  </div>
+
+  <div class="controls">
+    <button onclick="resetGame()">게임 재시작</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('board');
+    const ctx = canvas.getContext('2d');
+    const turnText = document.getElementById('turn-text');
+
+    // 게임 설정 변수
+    const BOARD_SIZE = 600;
+    const MARGIN = 40;
+    const GRID_COUNT = 14; // 15줄 바둑판
+    const CELL_SIZE = (BOARD_SIZE - MARGIN * 2) / GRID_COUNT;
+    const STONE_RADIUS = 16;
+    const FRICTION = 0.98; // 마찰력 (돌이 구르다 멈추게 함)
+    const MIN_VELOCITY = 0.05; // 멈춤 판정 속도
+
+    // 게임 상태 변수
+    let currentTurn = 'black'; // 'black' 또는 'white'
+    let stones = [];
+    let selectedStone = null;
+    let isDragging = false;
+    let dragStartPos = { x: 0, y: 0 };
+    let dragCurrentPos = { x: 0, y: 0 };
+    let isMoving = false;
+
+    // 돌 클래스 정의
+    class Stone {
+      constructor(x, y, color) {
+        this.x = x;
+        this.y = y;
+        this.vx = 0;
+        this.vy = 0;
+        this.color = color; // 'black' or 'white'
+        this.radius = STONE_RADIUS;
+        this.alive = true;
+      }
+
+      draw() {
+        if (!this.alive) return;
+
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        
+        // 그림자 효과
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+        ctx.shadowBlur = 4;
+        ctx.shadowOffsetX = 2;
+        ctx.shadowOffsetY = 2;
+
+        if (this.color === 'black') {
+          let grad = ctx.createRadialGradient(this.x - 3, this.y - 3, 2, this.x, this.y, this.radius);
+          grad.addColorStop(0, '#666');
+          grad.addColorStop(1, '#000');
+          ctx.fillStyle = grad;
+        } else {
+          let grad = ctx.createRadialGradient(this.x - 3, this.y - 3, 2, this.x, this.y, this.radius);
+          grad.addColorStop(0, '#fff');
+          grad.addColorStop(1, '#ddd');
+          ctx.fillStyle = grad;
+        }
+        
+        ctx.fill();
+        ctx.closePath();
+
+        // 그림자 리셋
+        ctx.shadowColor = 'transparent';
+      }
+
+      update() {
+        if (!this.alive) return;
+
+        // 위치 업데이트
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // 마찰력 적용
+        this.vx *= FRICTION;
+        this.vy *= FRICTION;
+
+        // 속도가 미세해지면 정지
+        if (Math.hypot(this.vx, this.vy) < MIN_VELOCITY) {
+          this.vx = 0;
+          this.vy = 0;
+        }
+
+        // 판 밖으로 나갔는지 확인 (낙사 판정)
+        if (this.x < 0 || this.x > BOARD_SIZE || this.y < 0 || this.y > BOARD_SIZE) {
+          this.alive = false;
+        }
+      }
+    }
+
+    // 게임 초기화
+    function initStones() {
+      stones = [];
+      // 흑돌 배치 (아래쪽 2줄)
+      for (let i = 2; i <= 12; i += 2) {
+        stones.push(new Stone(MARGIN + i * CELL_SIZE, BOARD_SIZE - MARGIN - CELL_SIZE, 'black'));
+      }
+      // 백돌 배치 (위쪽 2줄)
+      for (let i = 2; i <= 12; i += 2) {
+        stones.push(new Stone(MARGIN + i * CELL_SIZE, MARGIN + CELL_SIZE, 'white'));
+      }
+    }
+
+    // 바둑판 그리기
+    function drawBoard() {
+      ctx.clearRect(0, 0, BOARD_SIZE, BOARD_SIZE);
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+
+      // 그리드 선 그리기
+      for (let i = 0; i <= GRID_COUNT; i++) {
+        // 세로선
+        ctx.beginPath();
+        ctx.moveTo(MARGIN + i * CELL_SIZE, MARGIN);
+        ctx.lineTo(MARGIN + i * CELL_SIZE, BOARD_SIZE - MARGIN);
+        ctx.stroke();
+
+        // 가로선
+        ctx.beginPath();
+        ctx.moveTo(MARGIN, MARGIN + i * CELL_SIZE);
+        ctx.lineTo(BOARD_SIZE - MARGIN, MARGIN + i * CELL_SIZE);
+        ctx.stroke();
+      }
+
+      // 화점(Dot) 그리기 (3x3 위치)
+      const dots = [3, 7, 11];
+      ctx.fillStyle = '#333';
+      for (let x of dots) {
+        for (let y of dots) {
+          ctx.beginPath();
+          ctx.arc(MARGIN + x * CELL_SIZE, MARGIN + y * CELL_SIZE, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    // 충돌 처리 (원형 2D 탄성 충돌)
+    function handleCollisions() {
+      for (let i = 0; i < stones.length; i++) {
+        for (let j = i + 1; j < stones.length; j++) {
+          let s1 = stones[i];
+          let s2 = stones[j];
+
+          if (!s1.alive || !s2.alive) continue;
+
+          let dx = s2.x - s1.x;
+          let dy = s2.y - s1.y;
+          let dist = Math.hypot(dx, dy);
+
+          // 두 돌이 겹쳤을 때
+          if (dist < STONE_RADIUS * 2) {
+            // 충돌 법선 벡터
+            let nx = dx / dist;
+            let ny = dy / dist;
+
+            // 중복 겹침 방지 (돌을 살짝 떼어놓음)
+            let overlap = (STONE_RADIUS * 2) - dist;
+            s1.x -= nx * overlap / 2;
+            s1.y -= ny * overlap / 2;
+            s2.x += nx * overlap / 2;
+            s2.y += ny * overlap / 2;
+
+            // 상대 속도
+            let kx = s1.vx - s2.vx;
+            let ky = s1.vy - s2.vy;
+            let p = 2 * (nx * kx + ny * ky) / 2; // 질량이 같다고 가정
+
+            // 충돌 후 속도 계산
+            s1.vx -= p * nx;
+            s1.vy -= p * ny;
+            s2.vx += p * nx;
+            s2.vy += p * ny;
+          }
+        }
+      }
+    }
+
+    // 조준선 및 힘 표시선 그리기
+    function drawAimLine() {
+      if (isDragging && selectedStone) {
+        let dx = dragStartPos.x - dragCurrentPos.x;
+        let dy = dragStartPos.y - dragCurrentPos.y;
+
+        // 발사 방향 선 (점선)
+        ctx.beginPath();
+        ctx.setLineDash([5, 5]);
+        ctx.moveTo(selectedStone.x, selectedStone.y);
+        ctx.lineTo(selectedStone.x + dx, selectedStone.y + dy);
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.setLineDash([]); // 점선 해제
+
+        // 당기는 조준선
+        ctx.beginPath();
+        ctx.moveTo(selectedStone.x, selectedStone.y);
+        ctx.lineTo(dragCurrentPos.x, dragCurrentPos.y);
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+    }
+
+    // 승리 조건 확인
+    function checkGameOver() {
+      const blackCount = stones.filter(s => s.alive && s.color === 'black').length;
+      const whiteCount = stones.filter(s => s.alive && s.color === 'white').length;
+
+      if (blackCount === 0) {
+        alert("백돌(⚪) 승리!");
+        resetGame();
+      } else if (whiteCount === 0) {
+        alert("흑돌(🖤) 승리!");
+        resetGame();
+      }
+    }
+
+    // 메인 루프 (애니메이션)
+    function gameLoop() {
+      drawBoard();
+
+      let moving = false;
+      stones.forEach(stone => {
+        stone.update();
+        if (stone.vx !== 0 || stone.vy !== 0) {
+          moving = true;
+        }
+      });
+
+      handleCollisions();
+
+      stones.forEach(stone => stone.draw());
+      drawAimLine();
+
+      // 움직임이 모두 끝났을 때 턴 교체 처리
+      if (isMoving && !moving) {
+        isMoving = false;
+        checkGameOver();
+        currentTurn = (currentTurn === 'black') ? 'white' : 'black';
+        turnText.textContent = currentTurn === 'black' ? '흑돌' : '백돌';
+        turnText.style.color = currentTurn === 'black' ? '#000' : '#888';
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    // 마우스 이벤트 핸들러
+    canvas.addEventListener('mousedown', (e) => {
+      if (isMoving) return; // 움직이는 동안은 조작 불가
+
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      // 클릭한 위치의 돌 찾기 (현재 턴인 돌만)
+      stones.forEach(stone => {
+        if (stone.alive && stone.color === currentTurn) {
+          let dist = Math.hypot(stone.x - mouseX, stone.y - mouseY);
+          if (dist < STONE_RADIUS) {
+            selectedStone = stone;
+            isDragging = true;
+            dragStartPos = { x: stone.x, y: stone.y };
+            dragCurrentPos = { x: mouseX, y: mouseY };
+          }
+        }
+      });
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const rect = canvas.getBoundingClientRect();
+      dragCurrentPos = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top
+      };
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      if (!isDragging) return;
+
+      // 드래그 벡터 계산 (반대 방향으로 튕겨나감 - 새총 방식)
+      let dx = dragStartPos.x - dragCurrentPos.x;
+      let dy = dragStartPos.y - dragCurrentPos.y;
+
+      // 발사 속도 가중치 (0.15)
+      selectedStone.vx = dx * 0.15;
+      selectedStone.vy = dy * 0.15;
+
+      isDragging = false;
+      selectedStone = null;
+      isMoving = true;
+    });
+
+    function resetGame() {
+      currentTurn = 'black';
+      turnText.textContent = '흑돌';
+      turnText.style.color = '#000';
+      isMoving = false;
+      initStones();
+    }
+
+    // 게임 시작
+    initStones();
+    gameLoop();
+  </script>
+</body>
+</html>
